@@ -4,7 +4,7 @@ const MAX_AWAKENINGS = 16;
 const WAVE_DURATION = 1.9;
 const WAVE_RADIUS = 0.52; // Angular radius on the sphere, in radians.
 
-/** One vertex mask on the existing mesh; all coordinates stay planet-local. */
+/** Per-pixel mask on the existing mesh; all coordinates stay planet-local. */
 export class WorldAwakening {
   private points = Array.from({ length: MAX_AWAKENINGS }, () => new Vector4(0, 0, 0, 1));
   private ages = new Float32Array(MAX_AWAKENINGS);
@@ -14,47 +14,51 @@ export class WorldAwakening {
     material.onBeforeCompile = (shader) => {
       shader.uniforms.uAwakeningPoints = { value: this.points };
       shader.uniforms.uAwakeningCount = this.count;
-      shader.uniforms.uLivingGreen = { value: new Color(0x4e8658) };
-      shader.uniforms.uLivingGold = { value: new Color(0xb9a56c) };
+      shader.uniforms.uLivingGreen = { value: new Color(0x638f60) };
+      shader.uniforms.uLivingGold = { value: new Color(0xb3a66b) };
       shader.vertexShader = shader.vertexShader.replace('#include <common>', `
         #include <common>
-        uniform vec4 uAwakeningPoints[${MAX_AWAKENINGS}];
-        uniform int uAwakeningCount;
-        varying float vAwakening;
+        varying vec3 vSurfaceDirection;
       `).replace('#include <begin_vertex>', `
         #include <begin_vertex>
-        vec3 surfaceDirection = normalize(position);
-        float sleeping = 1.0;
-        for (int i = 0; i < ${MAX_AWAKENINGS}; i++) {
-          if (i >= uAwakeningCount) break;
-          vec4 region = uAwakeningPoints[i];
-          // Dot product gives spherical distance without acos per vertex.
-          // w is cos(outer radius); the inner edge stays inside that radius.
-          if (region.w < 0.999999) {
-            float mask = smoothstep(region.w, mix(region.w, 1.0, 0.4),
-              dot(surfaceDirection, region.xyz));
-            sleeping *= 1.0 - mask;
-          }
-        }
-        // Smooth union: overlapping regions have no internal borders.
-        vAwakening = 1.0 - sleeping;
+        vSurfaceDirection = normalize(position);
       `);
       shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `
         #include <common>
-        varying float vAwakening;
+        varying vec3 vSurfaceDirection;
+        uniform vec4 uAwakeningPoints[${MAX_AWAKENINGS}];
+        uniform int uAwakeningCount;
         uniform vec3 uLivingGreen;
         uniform vec3 uLivingGold;
       `).replace('#include <normal_fragment_maps>', `
         #include <normal_fragment_maps>
+        // Interpolation changes vector length; normalize once per fragment.
+        vec3 surfaceDirection = normalize(vSurfaceDirection);
+        float sleeping = 1.0;
+        for (int i = 0; i < ${MAX_AWAKENINGS}; i++) {
+          if (i >= uAwakeningCount) break;
+          vec4 region = uAwakeningPoints[i];
+          // w is cos(outer radius): no acos or distance/sqrt per region.
+          // Branches depend only on uniforms, keeping derivatives well-defined.
+          if (region.w < 0.999999) {
+            float alignment = dot(surfaceDirection, region.xyz);
+            // Keep the soft inner edge at least one pixel wide at any DPR.
+            float feather = max((1.0 - region.w) * 0.4, fwidth(alignment));
+            float mask = smoothstep(region.w, region.w + feather, alignment);
+            sleeping *= 1.0 - mask;
+          }
+        }
+        // Smooth union: overlapping regions have no internal borders.
+        float awakening = 1.0 - sleeping;
         float sunlight = 0.0;
         #if NUM_DIR_LIGHTS > 0
           sunlight = smoothstep(0.3, 1.0, dot(normal, directionalLights[0].direction));
         #endif
-        vec3 livingColor = mix(uLivingGreen, uLivingGold, sunlight * 0.12);
-        diffuseColor.rgb = mix(diffuseColor.rgb, livingColor, vAwakening);
+        vec3 livingColor = mix(uLivingGreen, uLivingGold, sunlight * 0.35);
+        diffuseColor.rgb = mix(diffuseColor.rgb, livingColor, awakening);
       `);
     };
-    material.customProgramCacheKey = () => 'local-awakening-v1';
+    material.customProgramCacheKey = () => 'local-awakening-per-pixel-v2';
   }
 
   awaken(point: { x: number; y: number; z: number }): void {
