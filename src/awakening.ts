@@ -1,7 +1,7 @@
 import { Color, MeshStandardMaterial, Vector4 } from 'three';
 
 const MAX_AWAKENINGS = 16;
-const WAVE_DURATION = 1.35;
+const WAVE_DURATION = 1.9;
 const WAVE_RADIUS = 0.52; // Angular radius on the sphere, in radians.
 
 /** One vertex mask on the existing mesh; all coordinates stay planet-local. */
@@ -14,8 +14,8 @@ export class WorldAwakening {
     material.onBeforeCompile = (shader) => {
       shader.uniforms.uAwakeningPoints = { value: this.points };
       shader.uniforms.uAwakeningCount = this.count;
-      shader.uniforms.uLivingGreen = { value: new Color(0x638f60) };
-      shader.uniforms.uLivingGold = { value: new Color(0xb3a66b) };
+      shader.uniforms.uLivingGreen = { value: new Color(0x4e8658) };
+      shader.uniforms.uLivingGold = { value: new Color(0xb9a56c) };
       shader.vertexShader = shader.vertexShader.replace('#include <common>', `
         #include <common>
         uniform vec4 uAwakeningPoints[${MAX_AWAKENINGS}];
@@ -50,7 +50,7 @@ export class WorldAwakening {
         #if NUM_DIR_LIGHTS > 0
           sunlight = smoothstep(0.3, 1.0, dot(normal, directionalLights[0].direction));
         #endif
-        vec3 livingColor = mix(uLivingGreen, uLivingGold, sunlight * 0.35);
+        vec3 livingColor = mix(uLivingGreen, uLivingGold, sunlight * 0.12);
         diffuseColor.rgb = mix(diffuseColor.rgb, livingColor, vAwakening);
       `);
     };
@@ -72,7 +72,8 @@ export class WorldAwakening {
       if (this.ages[i] >= WAVE_DURATION) continue;
       this.ages[i] = Math.min(WAVE_DURATION, this.ages[i] + dt);
       const progress = this.ages[i] / WAVE_DURATION;
-      const eased = 1 - (1 - progress) ** 3;
+      // Smoothstep: zero speed at both ends, gentle acceleration in between.
+      const eased = progress * progress * (3 - 2 * progress);
       this.points[i].w = Math.cos(WAVE_RADIUS * eased);
     }
   }
