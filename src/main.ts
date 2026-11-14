@@ -6,6 +6,7 @@ import {
 import { createPlanet } from './planet';
 import { PlanetControls } from './controls';
 import { AdaptiveQuality } from './quality';
+import { WorldAwakening } from './awakening';
 
 /** Coordinates in planet-local space; independent of its current rotation. */
 export interface PlanetTapDetail {
@@ -36,6 +37,10 @@ function start(): void {
   const scene = new Scene();
   const camera = new PerspectiveCamera(35, 1, 0.1, 30);
   const planet = createPlanet();
+  const awakening = new WorldAwakening(planet.material);
+  canvas.addEventListener('planet-tap', (event) => {
+    awakening.awaken((event as CustomEvent<PlanetTapDetail>).detail.point);
+  });
   planet.rotation.set(0.15, -0.4, -0.1);
   scene.add(planet);
   scene.add(new HemisphereLight(0xd9e6f0, 0x394652, 1.5));
@@ -57,7 +62,7 @@ function start(): void {
     const hit = raycaster.intersectObject(planet, false)[0];
     if (!hit) return;
     const point = planet.worldToLocal(hit.point);
-    // Extension point only: no game logic or visual response in this version.
+    // The surface interaction uses the same local point as the public event.
     canvas.dispatchEvent(new CustomEvent<PlanetTapDetail>('planet-tap', {
       bubbles: true,
       detail: { point: { x: point.x, y: point.y, z: point.z } },
@@ -93,6 +98,7 @@ function start(): void {
     const dt = (now - renderedAt) / 1000;
     renderedAt = now;
     controls.update(Math.min(dt, 0.1));
+    awakening.update(Math.min(dt, 0.1));
     if (quality.sample(dt)) resize();
     renderer.render(scene, camera);
   }
