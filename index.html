@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#17232d" />
+    <meta name="description" content="Маленькая планета. Начало нового мира." />
+    <title>Маленький мир</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  </head>
+  <body>
+    <main class="world">
+      <header class="intro">
+        <div class="brand"><span class="brand-mark" aria-hidden="true">◌</span> МАЛЕНЬКИЙ МИР</div>
+        <p class="eyebrow">ГЛАВА 01 <span></span> НАЧАЛО</p>
+        <h1>Всё начинается<br />с маленького мира.</h1>
+        <p class="subtitle">Пока здесь только тишина. И целая планета.</p>
+      </header>
+      <section class="stage" aria-label="Интерактивная серая планета">
+        <canvas id="planet" tabindex="0" aria-label="Планета. Проведите пальцем или используйте стрелки, чтобы вращать." aria-describedby="gesture-hint"></canvas>
+        <p id="error" class="error" role="alert" hidden></p>
+      </section>
+      <footer class="outro">
+        <div class="gesture" aria-hidden="true"><span></span><i></i><span></span></div>
+        <p id="gesture-hint">Проведите пальцем, чтобы вращать</p>
+        <div class="caption"><span>ОДНА ПЛАНЕТА</span><span class="caption-line"></span><span>ТЫСЯЧИ ВОЗМОЖНОСТЕЙ</span></div>
+      </footer>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
