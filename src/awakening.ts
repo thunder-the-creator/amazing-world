@@ -1,8 +1,8 @@
 import { Color, MeshStandardMaterial, Vector4 } from 'three';
 
 const MAX_AWAKENINGS = 16;
-const WAVE_DURATION = 1.9;
-const WAVE_RADIUS = 0.52; // Angular radius on the sphere, in radians.
+export const WAVE_DURATION = 1.9;
+export const WAVE_RADIUS = 0.52; // Angular radius on the sphere, in radians.
 
 /** Per-pixel mask on the existing mesh; all coordinates stay planet-local. */
 export class WorldAwakening {
@@ -61,14 +61,15 @@ export class WorldAwakening {
     material.customProgramCacheKey = () => 'local-awakening-per-pixel-v2';
   }
 
-  awaken(point: { x: number; y: number; z: number }): void {
+  awaken(point: { x: number; y: number; z: number }): boolean {
     // Debug cap: retain the first 16 regions, never erase existing living land.
-    if (this.count.value === MAX_AWAKENINGS) return;
+    if (this.count.value === MAX_AWAKENINGS) return false;
     const length = Math.hypot(point.x, point.y, point.z);
-    if (!Number.isFinite(length) || length < 0.0001) return;
+    if (!Number.isFinite(length) || length < 0.0001) return false;
     this.points[this.count.value].set(point.x / length, point.y / length, point.z / length, 1);
     this.ages[this.count.value] = 0;
     this.count.value++;
+    return true;
   }
 
   update(dt: number): void {

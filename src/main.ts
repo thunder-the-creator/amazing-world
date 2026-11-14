@@ -7,6 +7,7 @@ import { createPlanet } from './planet';
 import { PlanetControls } from './controls';
 import { AdaptiveQuality } from './quality';
 import { WorldAwakening } from './awakening';
+import { Vegetation } from './vegetation';
 
 /** Coordinates in planet-local space; independent of its current rotation. */
 export interface PlanetTapDetail {
@@ -38,8 +39,10 @@ function start(): void {
   const camera = new PerspectiveCamera(35, 1, 0.1, 30);
   const planet = createPlanet();
   const awakening = new WorldAwakening(planet.material);
+  const vegetation = new Vegetation(planet);
   canvas.addEventListener('planet-tap', (event) => {
-    awakening.awaken((event as CustomEvent<PlanetTapDetail>).detail.point);
+    const point = (event as CustomEvent<PlanetTapDetail>).detail.point;
+    if (awakening.awaken(point)) vegetation.plant(point);
   });
   planet.rotation.set(0.15, -0.4, -0.1);
   scene.add(planet);
@@ -99,6 +102,7 @@ function start(): void {
     renderedAt = now;
     controls.update(Math.min(dt, 0.1));
     awakening.update(Math.min(dt, 0.1));
+    vegetation.update(Math.min(dt, 0.1));
     if (quality.sample(dt)) resize();
     renderer.render(scene, camera);
   }
