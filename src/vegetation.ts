@@ -1,14 +1,17 @@
 import {
   BufferGeometry, Color, CylinderGeometry, DynamicDrawUsage, Float32BufferAttribute,
-  InstancedMesh, Matrix4, Mesh, MeshStandardMaterial, Quaternion, Raycaster,
+  InstancedBufferAttribute, InstancedMesh, Matrix4, Mesh, MeshStandardMaterial, Quaternion, Raycaster,
   Sphere, SphereGeometry, Vector3,
 } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { WAVE_DURATION, WAVE_RADIUS } from './awakening';
 
-const MAX_GRASS = 240;
+const MAX_GRASS = 144;
+const GRASS_PER_PATCH = 6;
 const MAX_FLOWERS_PER_TYPE = 24;
 const MIN_SPACING = 0.085;
+const GRASS_SPACING = 0.11;
+const WIND_SPEED = 0.8;
 const UP = new Vector3(0, 1, 0);
 
 // Rounded, smooth leaves/petals. Each species is one merged geometry/material.
@@ -47,9 +50,12 @@ function combine(parts: BufferGeometry[]): BufferGeometry {
 }
 
 function grassGeometry(): BufferGeometry {
-  return combine(Array.from({ length: 4 }, (_, i) =>
-    leaf(0.135 + (i % 2) * 0.02, 0.7 + (i % 3) * 0.12, 0.26 + i * 0.11,
-      i * 2.4, i % 2 ? 0x7da16c : 0x659360)));
+  // A small upright fan: one central blade and two restrained curved side blades.
+  return combine([
+    leaf(0.11, 0.74, 0.08, 0, 0x739d6b),
+    leaf(0.1, 0.62, 0.19, 2.1, 0x78a16e),
+    leaf(0.1, 0.65, 0.19, 4.2, 0x709969),
+  ]);
 }
 
 function flowerGeometry(type: 'pink' | 'lavender'): BufferGeometry {
@@ -93,7 +99,7 @@ interface Plant {
   duration: number;
 }
 
-function batch(geometry: BufferGeometry, capacity: number): InstancedMesh {
+function batch(geometry: BufferGeometry, capacity: number): InstancedMesh<BufferGeometry, MeshStandardMaterial> {
   const mesh = new InstancedMesh(geometry,
     new MeshStandardMaterial({ vertexColors: true, roughness: 0.95 }), capacity);
   mesh.count = 0;
@@ -111,11 +117,35 @@ export class Vegetation {
   private plants: Plant[] = [];
   private growing: Plant[] = [];
   private time = 0;
+  private windTime = { value: 0 };
+  private grassPhase = new InstancedBufferAttribute(new Float32Array(MAX_GRASS), 1);
+  private reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
   private raycaster = new Raycaster();
   private matrix = new Matrix4();
   private scale = new Vector3();
 
   constructor(private planet: Mesh) {
+    this.grass.geometry.setAttribute('grassPhase', this.grassPhase);
+    this.grass.material.onBeforeCompile = (shader) => {
+      shader.uniforms.uGrassTime = this.windTime;
+      shader.vertexShader = shader.vertexShader.replace('#include <common>', `
+        #include <common>
+        uniform float uGrassTime;
+        attribute float grassPhase;
+      `).replace('#include <beginnormal_vertex>', `
+        #include <beginnormal_vertex>
+        float grassT = clamp((position.y - 0.2) / 0.55, 0.0, 1.0);
+        float grassSway = sin(uGrassTime * ${WIND_SPEED.toFixed(1)} + grassPhase) * 0.025;
+        float grassWeight = grassT * grassT * (3.0 - 2.0 * grassT);
+        // Match the normal to the bend; the lower blade and root stay stationary.
+        float grassSlope = grassSway * 6.0 * grassT * (1.0 - grassT) / 0.55;
+        objectNormal.y -= grassSlope * (objectNormal.x + 0.35 * objectNormal.z);
+      `).replace('#include <begin_vertex>', `
+        #include <begin_vertex>
+        transformed.xz += vec2(1.0, 0.35) * grassSway * grassWeight;
+      `);
+    };
+    this.grass.material.customProgramCacheKey = () => 'refined-grass-wind-v1';
     // Instances and growth transforms are local to the rotating planet.
     planet.add(this.grass, this.pinkFlowers, this.lavenderFlowers);
   }
@@ -127,19 +157,38 @@ export class Vegetation {
     const bitangent = new Vector3().crossVectors(center, tangent);
     this.planet.updateWorldMatrix(true, false);
     let lastGrassStart = this.time;
+    const patchAngle = Math.random() * Math.PI * 2;
 
-    for (let i = 0; i < 14; i++) {
-      const isGrass = i < 12;
-      const mesh = isGrass ? this.grass : i === 12 ? this.pinkFlowers : this.lavenderFlowers;
+    for (let i = 0; i < GRASS_PER_PATCH + 2; i++) {
+      const isGrass = i < GRASS_PER_PATCH;
+      const mesh = isGrass ? this.grass : i === GRASS_PER_PATCH ? this.pinkFlowers : this.lavenderFlowers;
       if (mesh.count >= (isGrass ? MAX_GRASS : MAX_FLOWERS_PER_TYPE)) continue;
       // Bounded rejection sampling prevents dense piles in overlapping regions.
       for (let attempt = 0; attempt < 12; attempt++) {
-        const radius = i === 0 && attempt === 0 ? 0.035 : 0.1 + Math.sqrt(Math.random()) * 0.23;
-        const angle = Math.random() * Math.PI * 2;
+        let radius: number;
+        let angle: number;
+        if (isGrass) {
+          // Two loose groups of three, with open ground between them.
+          // Retries stay in their group; crowded patches simply receive less grass.
+          const group = Math.floor(i / 3);
+          const groupAngle = patchAngle + group * Math.PI;
+          const tuftAngle = patchAngle + (i % 3) * Math.PI * 2 / 3 + group * 0.5;
+          const spread = 0.07 + Math.random() * 0.008;
+          const x = 0.15 * Math.cos(groupAngle) + spread * Math.cos(tuftAngle)
+            + (Math.random() - 0.5) * 0.008;
+          const y = 0.15 * Math.sin(groupAngle) + spread * Math.sin(tuftAngle)
+            + (Math.random() - 0.5) * 0.008;
+          radius = Math.hypot(x, y);
+          angle = Math.atan2(y, x);
+        } else {
+          radius = 0.1 + Math.sqrt(Math.random()) * 0.23;
+          angle = Math.random() * Math.PI * 2;
+        }
         const direction = center.clone().multiplyScalar(Math.cos(radius))
           .addScaledVector(tangent, Math.sin(radius) * Math.cos(angle))
           .addScaledVector(bitangent, Math.sin(radius) * Math.sin(angle)).normalize();
-        if (this.occupied.some(p => p.distanceToSquared(direction) < MIN_SPACING ** 2)) continue;
+        const spacing = isGrass ? GRASS_SPACING : MIN_SPACING;
+        if (this.occupied.some(p => p.distanceToSquared(direction) < spacing ** 2)) continue;
 
         // Sample actual triangles and their interpolated local normals once at spawn.
         const origin = this.planet.localToWorld(direction.clone().multiplyScalar(2));
@@ -150,10 +199,11 @@ export class Vegetation {
         const normal = hit.normal.clone().normalize();
         const position = this.planet.worldToLocal(hit.point).addScaledVector(normal, -0.001);
         const rotation = new Quaternion().setFromUnitVectors(UP, normal)
-          .multiply(new Quaternion().setFromAxisAngle(UP, Math.random() * Math.PI * 2));
+          .multiply(new Quaternion().setFromAxisAngle(UP, isGrass
+            ? patchAngle + (Math.random() - 0.5) * 0.4 : Math.random() * Math.PI * 2));
         // A small local lean preserves the surface-aligned root.
         rotation.multiply(new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0),
-          (Math.random() - 0.5) * 0.18));
+          (Math.random() - 0.5) * (isGrass ? 0.05 : 0.18)));
 
         // Invert the existing smoothstep wave on CPU, only when spawning.
         // Plants start inside its green core, not ahead of the color front.
@@ -165,19 +215,23 @@ export class Vegetation {
           if (t * t * (3 - 2 * t) < target) low = t;
           else high = t;
         }
-        const size = (isGrass ? 0.085 : 0.09) * (0.85 + Math.random() * 0.3);
+        const size = isGrass ? 0.075 * (0.93 + Math.random() * 0.14)
+          : 0.09 * (0.85 + Math.random() * 0.3);
         let startTime = this.time + high * WAVE_DURATION + 0.3 + Math.random() * 0.2;
         if (isGrass) lastGrassStart = Math.max(lastGrassStart, startTime);
-        else startTime = Math.max(startTime, lastGrassStart + 0.2 + (i - 12) * 0.15);
+        else startTime = Math.max(startTime, lastGrassStart + 0.2 + (i - GRASS_PER_PATCH) * 0.15);
         const plant: Plant = {
           mesh, index: mesh.count++, position, rotation,
-          finalScale: new Vector3(size, size * (0.85 + Math.random() * 0.3), size),
+          finalScale: new Vector3(size, size * (isGrass
+            ? 0.94 + Math.random() * 0.12 : 0.85 + Math.random() * 0.3), size),
           startTime, duration: 0.7 + Math.random() * 0.4,
         };
         if (isGrass) {
           mesh.setColorAt(plant.index, new Color().setRGB(
-            0.86 + Math.random() * 0.14, 0.93 + Math.random() * 0.07, 0.84 + Math.random() * 0.16));
+            0.96 + Math.random() * 0.04, 0.97 + Math.random() * 0.03, 0.95 + Math.random() * 0.05));
           mesh.instanceColor!.needsUpdate = true;
+          this.grassPhase.setX(plant.index, Math.random() * Math.PI * 2);
+          this.grassPhase.needsUpdate = true;
         }
         this.writeScale(plant, 0);
         this.plants.push(plant);
@@ -198,6 +252,9 @@ export class Vegetation {
 
   update(dt: number): void {
     this.time += dt;
+    if (!this.reducedMotion.matches) {
+      this.windTime.value = (this.windTime.value + dt) % (Math.PI * 2 / WIND_SPEED);
+    }
     for (let i = this.growing.length - 1; i >= 0; i--) {
       const plant = this.growing[i];
       if (this.time < plant.startTime) continue;
