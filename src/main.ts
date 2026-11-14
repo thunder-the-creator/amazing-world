@@ -8,6 +8,8 @@ import { PlanetControls } from './controls';
 import { AdaptiveQuality } from './quality';
 import { WorldAwakening } from './awakening';
 import { Vegetation } from './vegetation';
+import { CameraMotion } from './camera';
+import { createStarfield } from './starfield';
 
 /** Coordinates in planet-local space; independent of its current rotation. */
 export interface PlanetTapDetail {
@@ -36,7 +38,10 @@ function start(): void {
   renderer.setClearColor(0x000000, 0);
 
   const scene = new Scene();
-  const camera = new PerspectiveCamera(35, 1, 0.1, 30);
+  const camera = new PerspectiveCamera(35, 1, 0.1, 100);
+  const cameraMotion = new CameraMotion(camera);
+  const stars = createStarfield();
+  scene.add(stars);
   const planet = createPlanet();
   const awakening = new WorldAwakening(planet.material);
   const vegetation = new Vegetation(planet);
@@ -70,7 +75,7 @@ function start(): void {
       bubbles: true,
       detail: { point: { x: point.x, y: point.y, z: point.z } },
     }));
-  });
+  }, cameraMotion);
 
   const quality = new AdaptiveQuality();
   function resize(): void {
@@ -78,11 +83,8 @@ function start(): void {
     const height = Math.max(1, stage.clientHeight);
     renderer.setPixelRatio(quality.pixelRatio(width, height));
     renderer.setSize(width, height, false);
-    camera.aspect = width / height;
-    const halfFov = camera.fov * Math.PI / 360;
-    const limitingFov = Math.min(halfFov, Math.atan(Math.tan(halfFov) * camera.aspect));
-    camera.position.z = 1.065 / Math.sin(limitingFov) * 1.18;
-    camera.updateProjectionMatrix();
+    cameraMotion.resize(width / height);
+    stars.material.uniforms.pixelRatio.value = renderer.getPixelRatio();
   }
   new ResizeObserver(resize).observe(stage);
   resize();
@@ -101,6 +103,9 @@ function start(): void {
     const dt = (now - renderedAt) / 1000;
     renderedAt = now;
     controls.update(Math.min(dt, 0.1));
+    cameraMotion.update(Math.min(dt, 0.1));
+    // A camera-centered shell behaves like a distant sky during zoom.
+    stars.position.copy(camera.position);
     awakening.update(Math.min(dt, 0.1));
     vegetation.update(Math.min(dt, 0.1));
     if (quality.sample(dt)) resize();
