@@ -10,6 +10,7 @@ import { WorldAwakening } from './awakening';
 import { Vegetation } from './vegetation';
 import { CameraMotion } from './camera';
 import { createStarfield } from './starfield';
+import { createLandscape } from './landscape';
 
 /** Coordinates in planet-local space; independent of its current rotation. */
 export interface PlanetTapDetail {
@@ -43,8 +44,9 @@ function start(): void {
   const stars = createStarfield();
   scene.add(stars);
   const planet = createPlanet();
+  const landscape = createLandscape(planet);
   const awakening = new WorldAwakening(planet.material);
-  const vegetation = new Vegetation(planet);
+  const vegetation = new Vegetation(planet, landscape.canPlant);
   canvas.addEventListener('planet-tap', (event) => {
     const point = (event as CustomEvent<PlanetTapDetail>).detail.point;
     if (awakening.awaken(point)) vegetation.plant(point);
@@ -67,7 +69,7 @@ function start(): void {
     camera.updateMatrixWorld();
     planet.updateMatrixWorld();
     raycaster.setFromCamera(pointer, camera);
-    const hit = raycaster.intersectObject(planet, false)[0];
+    const hit = raycaster.intersectObjects(landscape.pickables, false)[0];
     if (!hit) return;
     const point = planet.worldToLocal(hit.point);
     // The surface interaction uses the same local point as the public event.

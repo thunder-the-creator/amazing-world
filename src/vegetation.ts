@@ -124,7 +124,10 @@ export class Vegetation {
   private matrix = new Matrix4();
   private scale = new Vector3();
 
-  constructor(private planet: Mesh) {
+  constructor(
+    private planet: Mesh,
+    private canPlant: (direction: Vector3, normal: Vector3) => boolean = () => true,
+  ) {
     this.grass.geometry.setAttribute('grassPhase', this.grassPhase);
     this.grass.material.onBeforeCompile = (shader) => {
       shader.uniforms.uGrassTime = this.windTime;
@@ -197,6 +200,7 @@ export class Vegetation {
         const hit = this.raycaster.intersectObject(this.planet, false)[0];
         if (!hit?.normal) continue;
         const normal = hit.normal.clone().normalize();
+        if (!this.canPlant(direction, normal)) continue;
         const position = this.planet.worldToLocal(hit.point).addScaledVector(normal, -0.001);
         const rotation = new Quaternion().setFromUnitVectors(UP, normal)
           .multiply(new Quaternion().setFromAxisAngle(UP, isGrass
