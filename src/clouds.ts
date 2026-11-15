@@ -1,127 +1,176 @@
 import {
-  CanvasTexture, Color, InstancedMesh, MathUtils, Matrix4, Mesh, Object3D,
-  PlaneGeometry, Quaternion, ShaderMaterial, Vector3,
+  Color, DataTexture, MathUtils, Mesh, Object3D, RepeatWrapping, RedFormat,
+  ShaderMaterial, SphereGeometry, Vector3, LinearFilter, LinearMipmapLinearFilter,
 } from 'three';
+import { MOUNTAINS } from './terrain';
 
-function cloudTexture(): CanvasTexture {
-  const canvas = document.createElement('canvas');
-  canvas.width = 128;
-  canvas.height = 64;
-  const context = canvas.getContext('2d')!;
-  // One small shared alpha texture: overlapping soft lobes with transparent margins.
-  const lobes = [
-    [27, 37, 21], [47, 29, 25], [70, 25, 24], [93, 35, 23], [65, 41, 21],
-  ];
-  for (const [x, y, radius] of lobes) {
-    const gradient = context.createRadialGradient(x, y, 0, x, y, radius);
-    gradient.addColorStop(0, 'rgba(255,255,255,0.94)');
-    gradient.addColorStop(0.42, 'rgba(255,255,255,0.82)');
-    gradient.addColorStop(0.73, 'rgba(255,255,255,0.32)');
-    gradient.addColorStop(1, 'rgba(255,255,255,0)');
-    context.fillStyle = gradient;
-    context.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+// All noise is baked once on the CPU. No noise loops or ray marching on the GPU.
+function cloudTexture(): DataTexture {
+  const size = 32, grid = new Float32Array(size ** 3);
+  let seed = 417;
+  for (let i = 0; i < grid.length; i++) {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    grid[i] = seed / 4294967296;
   }
-  return new CanvasTexture(canvas);
+  function noise(x: number, y: number, z: number): number {
+    const ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z);
+    const smooth = (t: number) => t * t * (3 - 2 * t);
+    const u = smooth(x - ix), v = smooth(y - iy), w = smooth(z - iz);
+    const at = (a: number, b: number, c: number) => grid[(a & 31) + ((b & 31) * size) + ((c & 31) * size * size)];
+    const lerp = MathUtils.lerp;
+    return lerp(lerp(lerp(at(ix, iy, iz), at(ix + 1, iy, iz), u),
+      lerp(at(ix, iy + 1, iz), at(ix + 1, iy + 1, iz), u), v),
+    lerp(lerp(at(ix, iy, iz + 1), at(ix + 1, iy, iz + 1), u),
+      lerp(at(ix, iy + 1, iz + 1), at(ix + 1, iy + 1, iz + 1), u), v), w);
+  }
+  function field(x: number, y: number, z: number): number {
+    // Broad flowing forms, with smaller wisps; sampled in 3D to avoid UV seams.
+    const warp = noise(x * 2.2 + 4, y * 2.2, z * 2.2);
+    const twist = y * 0.6 + warp * 0.45;
+    const a = (x * Math.cos(twist) - z * Math.sin(twist)) * 7;
+    const b = y * 7 + warp * 0.8;
+    const c = (z * Math.cos(twist) + x * Math.sin(twist)) * 7;
+    return noise(a, b, c) * 0.48 + noise(a * 2.1, b * 2.1, c * 2.1) * 0.30
+      + noise(a * 4.3, b * 4.3, c * 4.3) * 0.15 + noise(a * 8.6, b * 8.6, c * 8.6) * 0.07;
+  }
+  const width = 512, height = 256, data = new Uint8Array(width * height);
+  for (let row = 0; row < height; row++) {
+    const theta = (1 - (row + 0.5) / height) * Math.PI;
+    for (let col = 0; col < width; col++) {
+      const phi = (col + 0.5) / width * Math.PI * 2;
+      const x = -Math.cos(phi) * Math.sin(theta), y = Math.cos(theta), z = Math.sin(phi) * Math.sin(theta);
+      const value = field(x, y, z), offset = row * width + col;
+      data[offset] = Math.round(value * 255);
+    }
+  }
+  const texture = new DataTexture(data, width, height, RedFormat);
+  texture.wrapS = RepeatWrapping;
+  texture.magFilter = LinearFilter;
+  texture.minFilter = LinearMipmapLinearFilter;
+  texture.generateMipmaps = true;
+  texture.needsUpdate = true;
+  return texture;
 }
 
+function shellGeometry(): SphereGeometry {
+  const geometry = new SphereGeometry(1, 64, 48);
+  const position = geometry.attributes.position, normal = geometry.attributes.normal;
+  const direction = new Vector3(), outward = new Vector3();
+  for (let i = 0; i < position.count; i++) {
+    direction.fromBufferAttribute(position, i).normalize();
+    // A broad rounded crown encloses the mountain range without enlarging the
+    // whole equator or changing the existing camera framing / zoom limits.
+    const crown = Math.max(0, direction.dot(MOUNTAINS.center));
+    const radius = 1.17 + 0.22 * crown ** 4;
+    position.setXYZ(i, direction.x * radius, direction.y * radius, direction.z * radius);
+    // Analytic normals stay smooth across the duplicated UV seam and poles.
+    const slope = 0.88 * crown ** 3;
+    outward.copy(direction).multiplyScalar(radius + slope * crown)
+      .addScaledVector(MOUNTAINS.center, -slope).normalize();
+    normal.setXYZ(i, outward.x, outward.y, outward.z);
+  }
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
+const shellVertex = `
+  varying vec2 shellUv;
+  varying vec3 viewNormal;
+  varying vec3 viewPosition;
+  void main() {
+    shellUv = uv;
+    viewNormal = normalize(normalMatrix * normal);
+    vec4 point = modelViewMatrix * vec4(position, 1.0);
+    viewPosition = point.xyz;
+    gl_Position = projectionMatrix * point;
+  }
+`;
+
 export class CloudVeil {
-  private opacity = { value: 0.75 };
-  private haloOpacity = { value: 0.12 };
-  readonly clouds: InstancedMesh<PlaneGeometry, ShaderMaterial>;
-  readonly halo: Mesh<PlaneGeometry, ShaderMaterial>;
+  private opacity = { value: 1 };
+  private haloOpacity = { value: 0.65 };
+  readonly clouds: Mesh<SphereGeometry, ShaderMaterial>;
+  readonly halo: Mesh<SphereGeometry, ShaderMaterial>;
 
   constructor(planet: Object3D) {
-    const material = new ShaderMaterial({
+    const geometry = shellGeometry();
+    this.clouds = new Mesh(geometry, new ShaderMaterial({
       transparent: true, depthWrite: false,
       uniforms: {
-        cloudMap: { value: cloudTexture() },
-        veilOpacity: this.opacity,
-        cloudColor: { value: new Color(0xc6d2dc) },
+        cloudMap: { value: cloudTexture() }, veilOpacity: this.opacity,
+        cloudLight: { value: new Color(0xe8eff1) }, cloudShadow: { value: new Color(0xa5b7c6) },
       },
-      vertexShader: `
-        varying vec2 cloudUv;
-        void main() {
-          cloudUv = uv;
-          vec4 center = modelViewMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
-          // Only the centers rotate with the planet; each card faces the camera.
-          vec2 offset = mat2(instanceMatrix[0].xy, instanceMatrix[1].xy) * position.xy;
-          gl_Position = projectionMatrix * (center + vec4(offset, 0.0, 0.0));
-        }
-      `,
+      vertexShader: shellVertex,
       fragmentShader: `
         uniform sampler2D cloudMap;
         uniform float veilOpacity;
-        uniform vec3 cloudColor;
-        varying vec2 cloudUv;
+        uniform vec3 cloudLight;
+        uniform vec3 cloudShadow;
+        varying vec2 shellUv;
+        varying vec3 viewNormal;
+        varying vec3 viewPosition;
         void main() {
-          float alpha = texture2D(cloudMap, cloudUv).a * veilOpacity;
-          if (alpha < 0.005) discard;
-          // Shared RGB makes overlap order independent within this single batch.
-          gl_FragColor = vec4(cloudColor, alpha);
+          float cloud = texture2D(cloudMap, shellUv).r;
+          vec3 normal = normalize(viewNormal);
+          // Screen derivatives give the baked folds gentle volume (one texture
+          // fetch, no normal map and no per-fragment procedural noise).
+          vec3 dx = dFdx(viewPosition), dy = dFdy(viewPosition);
+          vec3 tangentX = cross(dy, normal), tangentY = cross(normal, dx);
+          float determinant = dot(dx, tangentX);
+          normal = normalize(abs(determinant) * normal - sign(determinant) * 0.026
+            * (dFdx(cloud) * tangentX + dFdy(cloud) * tangentY));
+          float sunlight = max(0.0, dot(normal, normalize(vec3(-3.0, 4.0, 5.0))));
+          float billow = smoothstep(0.28, 0.72, cloud);
+          vec3 color = mix(cloudShadow, cloudLight, 0.35 + billow * 0.65) * (0.24 + sunlight * 0.86);
+          float facing = max(0.0, dot(normalize(viewNormal), normalize(-viewPosition)));
+          float rim = 1.0 - facing;
+          color += vec3(0.08, 0.11, 0.14) * rim * rim;
+          // Fully opaque at rest: even the darker cloud folds hide the terrain.
+          // Cloud density only varies the dissolving edge during the near reveal.
+          float alpha = clamp(veilOpacity + (cloud - 0.5) * 2.0 * veilOpacity * (1.0 - veilOpacity), 0.0, 1.0);
+          gl_FragColor = vec4(color, alpha * smoothstep(0.0, 0.35, facing));
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
         }
       `,
-    });
-    // A few elongated clusters, with gaps; the rear clusters appear during rotation.
-    const clusters = [
-      { direction: [0.22, 0.62, 0.9], altitude: 1.48, width: 1.28, height: 0.52, tilt: -0.12 },
-      { direction: [-0.55, 0.15, 0.82], altitude: 1.25, width: 0.9, height: 0.4, tilt: 0.18 },
-      { direction: [0.8, 0.3, 0.52], altitude: 1.3, width: 0.95, height: 0.43, tilt: -0.15 },
-      { direction: [0.35, -0.45, 0.82], altitude: 1.27, width: 1.15, height: 0.46, tilt: 0.1 },
-      { direction: [0.35, 0.25, 0.88], altitude: 1.27, width: 1.0, height: 0.38, tilt: -0.22 },
-      { direction: [-0.7, 0.52, -0.5], altitude: 1.3, width: 1.05, height: 0.43, tilt: 0.15 },
-      { direction: [0.65, -0.1, -0.75], altitude: 1.27, width: 1.1, height: 0.42, tilt: -0.2 },
-      { direction: [-0.3, -0.72, -0.63], altitude: 1.28, width: 0.95, height: 0.4, tilt: 0.1 },
-    ];
-    this.clouds = new InstancedMesh(new PlaneGeometry(2, 2), material, clusters.length);
-    const matrix = new Matrix4(), axis = new Vector3(0, 0, 1);
-    clusters.forEach((cluster, i) => {
-      matrix.compose(new Vector3(...cluster.direction).normalize().multiplyScalar(cluster.altitude),
-        new Quaternion().setFromAxisAngle(axis, cluster.tilt), new Vector3(cluster.width / 2, cluster.height / 2, 1));
-      this.clouds.setMatrixAt(i, matrix);
-    });
+    }));
     this.clouds.name = 'cloud-veil';
-    this.clouds.frustumCulled = false; // Billboard expansion happens in the vertex shader.
     this.clouds.renderOrder = 5;
 
-    this.halo = new Mesh(new PlaneGeometry(3, 3), new ShaderMaterial({
+    // A real enclosing shell: Fresnel-like rim with a soft outer falloff.
+    // Front faces only, so each shell adds one draw call and no double-sided pass.
+    this.halo = new Mesh(geometry, new ShaderMaterial({
       transparent: true, depthWrite: false,
-      uniforms: { haloOpacity: this.haloOpacity, haloColor: { value: new Color(0x819eb4) } },
-      vertexShader: `
-        varying vec2 haloPosition;
-        void main() {
-          haloPosition = position.xy;
-          vec4 center = modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0);
-          gl_Position = projectionMatrix * (center + vec4(position.xy, 0.0, 0.0));
-        }
-      `,
+      uniforms: { haloOpacity: this.haloOpacity, haloColor: { value: new Color(0xb4d5ed) } },
+      vertexShader: shellVertex,
       fragmentShader: `
-        varying vec2 haloPosition;
         uniform float haloOpacity;
         uniform vec3 haloColor;
+        varying vec3 viewNormal;
+        varying vec3 viewPosition;
         void main() {
-          float radius = length(haloPosition);
-          float alpha = smoothstep(0.92, 1.04, radius) * (1.0 - smoothstep(1.04, 1.48, radius));
-          alpha *= haloOpacity;
-          if (alpha < 0.002) discard;
+          float facing = max(0.0, dot(normalize(viewNormal), normalize(-viewPosition)));
+          float rim = 1.0 - facing;
+          float alpha = rim * rim * smoothstep(0.0, 0.4, facing) * haloOpacity;
           gl_FragColor = vec4(haloColor, alpha);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
         }
       `,
     }));
+    this.halo.scale.setScalar(1.04);
     this.halo.name = 'soft-atmosphere';
-    this.halo.frustumCulled = false;
-    this.halo.renderOrder = 1;
-    // These visuals are intentionally absent from landscape.pickables.
-    planet.add(this.halo, this.clouds);
+    this.halo.renderOrder = 4;
+    // The existing pickable list contains only land, water and rocks.
+    planet.add(this.clouds, this.halo);
   }
 
   update(dt: number, relativeDistance: number): void {
-    const distance = MathUtils.smoothstep(relativeDistance, 0.57, 1.05);
+    // Keep the mystery at medium/default distances; reveal only on approach.
+    const distance = MathUtils.smoothstep(relativeDistance, 0.60, 0.85);
     const blend = 1 - Math.exp(-5 * dt);
-    this.opacity.value += (0.035 + distance * 0.75 - this.opacity.value) * blend;
-    this.haloOpacity.value += (0.04 + distance * 0.08 - this.haloOpacity.value) * blend;
+    this.opacity.value += (distance - this.opacity.value) * blend;
+    this.haloOpacity.value += (0.025 + distance * 0.625 - this.haloOpacity.value) * blend;
+    this.clouds.visible = this.opacity.value > 0.001;
   }
 }
