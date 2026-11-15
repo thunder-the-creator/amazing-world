@@ -1,8 +1,8 @@
 import {
-  Color, DataTexture, MathUtils, Mesh, Object3D, RepeatWrapping, RedFormat,
-  ShaderMaterial, SphereGeometry, Vector3, LinearFilter, LinearMipmapLinearFilter,
+  AdditiveBlending, Color, DataTexture, MathUtils, Mesh, Object3D, RepeatWrapping, RedFormat,
+  ShaderMaterial, SphereGeometry, LinearFilter, LinearMipmapLinearFilter,
 } from 'three';
-import { MOUNTAINS } from './terrain';
+import { WORLD } from './world';
 
 // All noise is baked once on the CPU. No noise loops or ray marching on the GPU.
 function cloudTexture(): DataTexture {
@@ -53,24 +53,8 @@ function cloudTexture(): DataTexture {
 }
 
 function shellGeometry(): SphereGeometry {
-  const geometry = new SphereGeometry(1, 64, 48);
-  const position = geometry.attributes.position, normal = geometry.attributes.normal;
-  const direction = new Vector3(), outward = new Vector3();
-  for (let i = 0; i < position.count; i++) {
-    direction.fromBufferAttribute(position, i).normalize();
-    // A broad rounded crown encloses the mountain range without enlarging the
-    // whole equator or changing the existing camera framing / zoom limits.
-    const crown = Math.max(0, direction.dot(MOUNTAINS.center));
-    const radius = 1.17 + 0.22 * crown ** 4;
-    position.setXYZ(i, direction.x * radius, direction.y * radius, direction.z * radius);
-    // Analytic normals stay smooth across the duplicated UV seam and poles.
-    const slope = 0.88 * crown ** 3;
-    outward.copy(direction).multiplyScalar(radius + slope * crown)
-      .addScaledVector(MOUNTAINS.center, -slope).normalize();
-    normal.setXYZ(i, outward.x, outward.y, outward.z);
-  }
-  geometry.computeBoundingSphere();
-  return geometry;
+  // Constant radius and exact radial normals: round from every viewing direction.
+  return new SphereGeometry(WORLD.cloudRadius, 64, 48);
 }
 
 const shellVertex = `
@@ -128,7 +112,7 @@ export class CloudVeil {
           // Fully opaque at rest: even the darker cloud folds hide the terrain.
           // Cloud density only varies the dissolving edge during the near reveal.
           float alpha = clamp(veilOpacity + (cloud - 0.5) * 2.0 * veilOpacity * (1.0 - veilOpacity), 0.0, 1.0);
-          gl_FragColor = vec4(color, alpha * smoothstep(0.0, 0.35, facing));
+          gl_FragColor = vec4(color, alpha * smoothstep(0.0, 0.25, facing));
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
         }
@@ -140,8 +124,8 @@ export class CloudVeil {
     // A real enclosing shell: Fresnel-like rim with a soft outer falloff.
     // Front faces only, so each shell adds one draw call and no double-sided pass.
     this.halo = new Mesh(geometry, new ShaderMaterial({
-      transparent: true, depthWrite: false,
-      uniforms: { haloOpacity: this.haloOpacity, haloColor: { value: new Color(0xb4d5ed) } },
+      transparent: true, depthWrite: false, blending: AdditiveBlending,
+      uniforms: { haloOpacity: this.haloOpacity, haloColor: { value: new Color(0xd3e7fa) } },
       vertexShader: shellVertex,
       fragmentShader: `
         uniform float haloOpacity;
@@ -158,7 +142,7 @@ export class CloudVeil {
         }
       `,
     }));
-    this.halo.scale.setScalar(1.04);
+    this.halo.scale.setScalar(WORLD.atmosphereRadius / WORLD.cloudRadius);
     this.halo.name = 'soft-atmosphere';
     this.halo.renderOrder = 4;
     // The existing pickable list contains only land, water and rocks.

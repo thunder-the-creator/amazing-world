@@ -219,8 +219,8 @@ export class Vegetation {
           if (t * t * (3 - 2 * t) < target) low = t;
           else high = t;
         }
-        const size = isGrass ? 0.075 * (0.93 + Math.random() * 0.14)
-          : 0.09 * (0.85 + Math.random() * 0.3);
+        const size = isGrass ? 0.03 * (0.93 + Math.random() * 0.14)
+          : 0.038 * (0.85 + Math.random() * 0.3);
         let startTime = this.time + high * WAVE_DURATION + 0.3 + Math.random() * 0.2;
         if (isGrass) lastGrassStart = Math.max(lastGrassStart, startTime);
         else startTime = Math.max(startTime, lastGrassStart + 0.2 + (i - GRASS_PER_PATCH) * 0.15);

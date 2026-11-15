@@ -67,7 +67,7 @@ function geometry(positions: number[], indices: number[], colors: number[], regi
   const result = new BufferGeometry();
   result.setAttribute('position', new Float32BufferAttribute(positions, 3));
   result.setAttribute('color', new Float32BufferAttribute(colors, 3));
-  // Reserved semantic IDs for Stage 4B; no awakening effect is applied here.
+  // Reserved semantic IDs for future landscape awakening; no awakening effect is applied here.
   result.setAttribute('landscapeRegion', new Float32BufferAttribute(new Float32Array(positions.length / 3).fill(region), 1));
   result.setIndex(indices);
   result.computeVertexNormals();
@@ -88,7 +88,7 @@ function mountains(): BufferGeometry {
       const altitude = mountainHeight(x, y);
       direction.multiplyScalar(terrainRadius(direction) + altitude - 0.002);
       positions.push(direction.x, direction.y, direction.z);
-      const shade = Math.min(1, altitude * 2.4 + 0.08 * Math.sin(55 * y + 13 * x) + 0.12);
+      const shade = Math.min(1, altitude * 6 + 0.025 * Math.sin(23 * y + 9 * x) + 0.12);
       const color = low.clone().lerp(high, Math.max(0, shade));
       color.lerp(ground, 1 - MathUtils.smoothstep(altitude, 0, 0.04));
       colors.push(color.r, color.g, color.b);
@@ -182,13 +182,15 @@ export function createLandscape(planet: Mesh) {
     { direction: lakeDirection(2.45, 1.2), scale: new Vector3(0.038, 0.025, 0.028) },
     { direction: lakeDirection(3.6, 1.22), scale: new Vector3(0.05, 0.038, 0.035) },
     { direction: lakeDirection(4.8, 1.18), scale: new Vector3(0.04, 0.025, 0.03) },
-    { direction: new Vector3(-0.65, 0.17, 0.74).normalize(), scale: new Vector3(0.08, 0.085, 0.065) },
-    { direction: new Vector3(-0.76, 0.12, 0.64).normalize(), scale: new Vector3(0.065, 0.065, 0.05) },
+    { direction: new Vector3(-0.80, 0.30, 0.52).normalize(), scale: new Vector3(0.08, 0.085, 0.065) },
+    { direction: new Vector3(-0.78, 0.40, 0.50).normalize(), scale: new Vector3(0.065, 0.065, 0.05) },
     { direction: new Vector3(0.81, 0.48, 0.35).normalize(), scale: new Vector3(0.07, 0.13, 0.055) },
     { direction: new Vector3(0.87, 0.42, 0.27).normalize(), scale: new Vector3(0.045, 0.06, 0.04) },
     { direction: new Vector3(-0.3, -0.55, -0.78).normalize(), scale: new Vector3(0.10, 0.08, 0.065) },
     { direction: new Vector3(0.55, 0.4, -0.73).normalize(), scale: new Vector3(0.07, 0.07, 0.05) },
   ];
+  // Smaller landmarks leave room for future paths, homes and groves.
+  for (const placement of placements) placement.scale.multiplyScalar(0.65);
   const rocks = new InstancedMesh(rockGeometry, stoneMaterial, placements.length);
   rocks.name = 'dormant-rocks';
   const matrix = new Matrix4(), rotation = new Quaternion(), up = new Vector3(0, 1, 0);
@@ -203,11 +205,13 @@ export function createLandscape(planet: Mesh) {
   return {
     // Only terrain participates in tapping; plant children must never intercept a tap.
     pickables: [planet, stoneSurface, water, rocks],
-    // Local centers and semantic geometry IDs let Stage 4B address each feature separately.
+    // Local centers and semantic geometry IDs support future local appearance changes.
     regions: { mountains: MOUNTAINS, lake: LAKE, rocks: placements },
     stoneSurface, water, rocks,
     canPlant(direction: Vector3, normal: Vector3): boolean {
-      if (lakeMetric(direction) < 1.75 || mountainMetric(direction) > 0.003) return false;
+      // Also exclude the fine mountain apron: it can sit slightly above the
+      // coarser planet triangles even where the analytical ridge is very low.
+      if (lakeMetric(direction) < 1.75 || mountainMetric(direction) > 0.001) return false;
       if (normal.dot(direction) < Math.cos(Math.PI * 40 / 180)) return false;
       return !placements.some(rock => direction.distanceTo(rock.direction)
         < Math.max(rock.scale.x, rock.scale.z) * 1.15 + 0.055);
