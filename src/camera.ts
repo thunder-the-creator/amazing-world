@@ -36,6 +36,11 @@ export class CameraMotion {
     return MathUtils.clamp(this.camera.position.z / this.framingDistance, 0.45, 1);
   }
 
+  /** Read-only actual zoom for visual reveal effects, independent of screen shape. */
+  get relativeDistance(): number {
+    return this.camera.position.z / this.framingDistance;
+  }
+
   update(dt: number): void {
     const blend = 1 - Math.exp(-7 * dt);
     this.camera.position.z += (this.targetDistance - this.camera.position.z) * blend;

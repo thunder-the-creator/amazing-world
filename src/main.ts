@@ -11,6 +11,7 @@ import { Vegetation } from './vegetation';
 import { CameraMotion } from './camera';
 import { createStarfield } from './starfield';
 import { createLandscape } from './landscape';
+import { CloudVeil } from './clouds';
 
 /** Coordinates in planet-local space; independent of its current rotation. */
 export interface PlanetTapDetail {
@@ -45,6 +46,7 @@ function start(): void {
   scene.add(stars);
   const planet = createPlanet();
   const landscape = createLandscape(planet);
+  const veil = new CloudVeil(planet);
   const awakening = new WorldAwakening(planet.material);
   const vegetation = new Vegetation(planet, landscape.canPlant);
   canvas.addEventListener('planet-tap', (event) => {
@@ -106,6 +108,7 @@ function start(): void {
     renderedAt = now;
     controls.update(Math.min(dt, 0.1));
     cameraMotion.update(Math.min(dt, 0.1));
+    veil.update(Math.min(dt, 0.1), cameraMotion.relativeDistance);
     // A camera-centered shell behaves like a distant sky during zoom.
     stars.position.copy(camera.position);
     awakening.update(Math.min(dt, 0.1));
